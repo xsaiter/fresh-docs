@@ -3,10 +3,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <string.h>
 
 #include <libpq-fe.h>
-
 #include <curl/curl.h>
+#include <bzlib.h>
 
 #define LOG_ERR(...) fprintf(stderr, __VA_ARGS__)
 #define LOG_INFO(...) printf(__VA_ARGS__)
@@ -61,7 +62,7 @@ const char *read_text_file(const char *filename)
     return res;
 }
 
-PGconn *open_or_die_connection(const char *conninfo)
+static PGconn *conn_open_or_die(const char *conninfo)
 {
     PGconn *conn = PQconnectdb(conninfo);
     if (PQstatus(conn) != CONNECTION_OK) {
@@ -71,9 +72,9 @@ PGconn *open_or_die_connection(const char *conninfo)
     return conn;
 }
 
-inline static const char *get_merge_sql()
+inline static void conn_close(PGconn *conn)
 {
-    return read_text_file("merge.pgsql");
+    PQfinish(conn);
 }
 
 size_t write_file(void *ptr, size_t size, size_t nmemb, FILE *stream)
@@ -83,7 +84,6 @@ size_t write_file(void *ptr, size_t size, size_t nmemb, FILE *stream)
 
 int download_file(const char *url, const char *filename)
 {
-    return -1;
     CURL *curl = curl_easy_init();
     if (!curl) {
         return -1;
@@ -111,21 +111,93 @@ int download_file(const char *url, const char *filename)
     return 0;
 }
 
+static void cleanup_and_die(PGconn *conn, PGresult *res)
+{
+    fprintf(stderr, "%s\n", PQerrorMessage(conn));
+
+    if (res) {
+        PQclear(res);
+    }
+
+    if (conn) {
+        PQfinish(conn);
+    }
+
+    exit(EXIT_FAILURE);
+}
+
+void tank_create(PGconn *conn)
+{
+    PGresult *res = PQexec(conn,
+            "create temp table tank "
+            "(id bigserial, "
+            "serie character varying(15) null, "
+            "number character varying(15) null, "
+            "raw character varying(30) not null);");
+
+    if (PQresultStatus(res) != PGRES_COMMAND_OK) {
+        cleanup_and_die(conn, res);
+    }
+
+    PQclear(res);
+}
+
+void tank_fill(PGconn *conn)
+{
+    char *err_msg = NULL;
+
+    char buf[] = "test";
+
+    PGresult *res = PQexec(conn, "copy tank (raw) from stdin;");
+    int copy_res = PQputCopyData(conn, buf, strlen(buf));
+    if (copy_res != 1) {
+        cleanup_and_die(conn, res);
+    }
+    copy_res = PQputCopyEnd(conn, err_msg);
+    if (copy_res != 1) {
+        cleanup_and_die(conn, res);
+    }
+
+    res = PQexec(conn, "commit;");
+    if (PQresultStatus(res) != PGRES_COMMAND_OK) {
+        cleanup_and_die(conn, res);
+    }
+}
+
+void tank_merge(PGconn *conn)
+{
+    const char *merge_sql = read_text_file("merge.pgsql");
+    if (!merge_sql) {
+        die(conn, "failed to get merge sql");
+    }
+
+    PGresult *res = PQexec(conn, merge_sql);
+
+    if (PQresultStatus(res) != PGRES_COMMAND_OK) {
+        cleanup_and_die(conn, res);
+    }
+
+    PQclear(res);
+}
+
 int main(int argc, char** argv)
 {
     load_config();
 
-    int res = download_file(cfg.url, "data");
+    const char *fname = "data";
+
+    int res = download_file(cfg.url, fname);
     if (!res) {
         die(NULL, "failed to download file");
     }
 
-    const char *merge_sql = get_merge_sql();
-    if (!merge_sql) {
-        die(NULL, "failed to get merge sql");
-    }
+    PGconn *conn = conn_open_or_die(cfg.db_conn_str);
 
-    PGconn *conn = open_or_die_connection(cfg.db_conn_str);
+    tank_create(conn);
+    tank_fill(conn);
+    tank_merge(conn);
+
+    conn_close(conn);
 
     return (EXIT_SUCCESS);
 }
