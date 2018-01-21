@@ -21,7 +21,7 @@ config_s cfg;
 
 void load_config()
 {
-    cfg.db_conn_str = "host=17.0.0.1 port=5432 dbname=venus user=isa password=1q2w3e connect_timeout=2";
+    cfg.db_conn_str = "host=127.0.0.1 port=5432 dbname=venus user=isa password=1q2w3e connect_timeout=2";
     cfg.url = "http://";
 }
 
@@ -106,6 +106,7 @@ int download_file(const char *url, const char *filename)
     }
 
     curl_easy_cleanup(curl);
+    
     fclose(f);
 
     return 0;
@@ -180,22 +181,50 @@ void tank_merge(PGconn *conn)
     PQclear(res);
 }
 
+void test_fill(PGconn *conn)
+{
+    char *err_msg = NULL;
+
+    char buf[] = "test";
+
+    PGresult *res = PQexec(conn, "copy test_tank (raw) from stdin;");
+    int copy_res = PQputCopyData(conn, buf, strlen(buf));
+    if (copy_res != 1) {
+        cleanup_and_die(conn, res);
+    }
+    
+    copy_res = PQputCopyEnd(conn, err_msg);
+    
+    if (copy_res != 1) {
+        cleanup_and_die(conn, res);
+    }
+
+    res = PQexec(conn, "commit;");
+    if (PQresultStatus(res) != PGRES_COMMAND_OK) {
+        cleanup_and_die(conn, res);
+    }
+}
+
 int main(int argc, char** argv)
 {
     load_config();
-
+    /*
     const char *fname = "data";
 
     int res = download_file(cfg.url, fname);
     if (!res) {
         die(NULL, "failed to download file");
-    }
+    }*/
 
     PGconn *conn = conn_open_or_die(cfg.db_conn_str);
+    
+    test_fill(conn);
 
+    /*
     tank_create(conn);
     tank_fill(conn);
     tank_merge(conn);
+    */
 
     conn_close(conn);
 
