@@ -106,7 +106,7 @@ int download_file(const char *url, const char *filename)
     }
 
     curl_easy_cleanup(curl);
-    
+
     fclose(f);
 
     return 0;
@@ -183,20 +183,38 @@ void tank_merge(PGconn *conn)
 
 void test_fill(PGconn *conn)
 {
-    char *err_msg = NULL;
-
-    char buf[] = "test";
-
-    PGresult *res = PQexec(conn, "copy test_tank (raw) from stdin;");
-    int copy_res = PQputCopyData(conn, buf, strlen(buf));
-    if (copy_res != 1) {
-        cleanup_and_die(conn, res);
+    FILE *f = fopen("data/test_data.txt", "r");
+    if (f == NULL) {
+        perror("fopen");
+        exit(EXIT_FAILURE);
     }
-    
-    copy_res = PQputCopyEnd(conn, err_msg);
-    
-    if (copy_res != 1) {
-        cleanup_and_die(conn, res);
+
+    int r = 0;
+    const char *query = "copy test_tank (raw) from stdin;";
+
+    PGresult * res = NULL;
+    char * line = NULL;
+    size_t len = 0;
+    ssize_t read;
+    char *errormsg = NULL;
+
+    while ((read = getline(&line, &len, f)) != -1) {
+        res = PQexec(conn, query);
+        r = PQputCopyData(conn, line, read);
+        if (r != 1) {
+            cleanup_and_die(conn, res);
+        }
+
+        r = PQputCopyEnd(conn, errormsg);
+
+        if (r != 1) {
+            cleanup_and_die(conn, res);
+        }
+    }
+
+    fclose(f);
+    if (line) {
+        free(line);
     }
 
     res = PQexec(conn, "commit;");
@@ -205,9 +223,46 @@ void test_fill(PGconn *conn)
     }
 }
 
+void test_bz2()
+{
+    char *fn_r = "data/in.bzp2";
+    char *fn_w = "data/out.txt";
+
+    int len;
+
+    char buff[100];
+
+    BZFILE *fp_r = NULL;
+    FILE *fp_w = NULL;
+
+    if ((fp_w = fopen(fn_w, "wb")) == NULL) {        
+        perror("open");
+        exit(1);
+    }
+
+    if ((fp_r = BZ2_bzdopen(fn_r, "rb")) == NULL) {
+        exit(1);
+    }
+
+    while ((len = BZ2_bzread(fp_r, buff, 100)) > 0) {
+        fwrite(buff, 1, len, fp_w);
+    }
+
+    BZ2_bzclose(fp_r);
+
+    if (fp_w != stdout) {
+        fclose(fp_w);
+    }
+}
+
 int main(int argc, char** argv)
 {
     load_config();
+
+    PGconn *conn = conn_open_or_die(cfg.db_conn_str);
+
+    test_fill(conn);
+
     /*
     const char *fname = "data";
 
@@ -216,15 +271,11 @@ int main(int argc, char** argv)
         die(NULL, "failed to download file");
     }*/
 
-    PGconn *conn = conn_open_or_die(cfg.db_conn_str);
-    
-    test_fill(conn);
-
     /*
     tank_create(conn);
     tank_fill(conn);
     tank_merge(conn);
-    */
+     */
 
     conn_close(conn);
 
