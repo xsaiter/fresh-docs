@@ -15,6 +15,7 @@
 typedef struct {
     char *db_conn_str;
     char *url;
+    char *filename;
 } config_s;
 
 config_s cfg;
@@ -22,7 +23,8 @@ config_s cfg;
 void load_config()
 {
     cfg.db_conn_str = "host=127.0.0.1 port=5432 dbname=venus user=isa password=1q2w3e connect_timeout=2";
-    cfg.url = "http://";
+    cfg.url = "https://guvm.mvd.ru/upload/expired-passports/list_of_expired_passports.csv.bz2";
+    cfg.filename = "data/download.bz2";
 }
 
 static void die(PGconn *conn, const char *msg)
@@ -75,41 +77,6 @@ static PGconn *conn_open_or_die(const char *conninfo)
 inline static void conn_close(PGconn *conn)
 {
     PQfinish(conn);
-}
-
-size_t write_file(void *ptr, size_t size, size_t nmemb, FILE *stream)
-{
-    return fwrite(ptr, size, nmemb, stream);
-}
-
-int download_file(const char *url, const char *filename)
-{
-    CURL *curl = curl_easy_init();
-    if (!curl) {
-        return -1;
-    }
-
-    FILE *f = fopen(filename, "wb");
-    if (!f) {
-        die(NULL, "failed to open file");
-    }
-
-    curl_easy_setopt(curl, CURLOPT_URL, url);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_file);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, f);
-
-    CURLcode code = curl_easy_perform(curl);
-    if (code != CURLE_OK) {
-        curl_easy_cleanup(curl);
-        fclose(f);
-        return -1;
-    }
-
-    curl_easy_cleanup(curl);
-
-    fclose(f);
-
-    return 0;
 }
 
 static void cleanup_and_die(PGconn *conn, PGresult *res)
@@ -181,6 +148,10 @@ void tank_merge(PGconn *conn)
     PQclear(res);
 }
 
+/*
+ * tests
+ */
+
 void test_fill(PGconn *conn)
 {
     FILE *f = fopen("data/test_data.txt", "r");
@@ -225,22 +196,21 @@ void test_fill(PGconn *conn)
 
 void test_bz2()
 {
-    char *fn_r = "data/in.bzp2";
-    char *fn_w = "data/out.txt";
+    const char *fn_r = "data/test_data.txt.bz2";
+    const char *fn_w = "data/out.txt";
 
-    int len;
-
-    char buff[100];
-
-    BZFILE *fp_r = NULL;
-    FILE *fp_w = NULL;
-
-    if ((fp_w = fopen(fn_w, "wb")) == NULL) {        
+    FILE *fp_w = fopen(fn_w, "wb");
+    if (!fp_w) {
         perror("open");
         exit(1);
     }
 
-    if ((fp_r = BZ2_bzdopen(fn_r, "rb")) == NULL) {
+    int len;
+    char buff[100];
+
+    BZFILE *fp_r = BZ2_bzopen(fn_r, "rb");
+    if (!fp_r) {
+        perror("reson");
         exit(1);
     }
 
@@ -250,18 +220,56 @@ void test_bz2()
 
     BZ2_bzclose(fp_r);
 
-    if (fp_w != stdout) {
-        fclose(fp_w);
+    fclose(fp_w);
+}
+
+static size_t write_file(void *ptr, size_t size, size_t nmemb, FILE *f)
+{
+    return fwrite(ptr, size, nmemb, f);
+}
+
+int download_file(const char *url, const char *filename)
+{
+    CURL *curl = curl_easy_init();
+    if (!curl) {
+        return -1;
     }
+
+    FILE *fp = fopen(filename, "wb");
+    if (!fp) {
+        die(NULL, "failed to open file");
+    }
+
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_file);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 500L);
+
+    CURLcode code = curl_easy_perform(curl);
+    if (code != CURLE_OK) {
+        curl_easy_cleanup(curl);
+        fclose(fp);
+        return -1;
+    }
+
+    curl_easy_cleanup(curl);
+
+    fclose(fp);
+
+    return 0;
 }
 
 int main(int argc, char** argv)
 {
-    load_config();
+    load_config();      
+    
+    download_file(cfg.url, cfg.filename);
 
-    PGconn *conn = conn_open_or_die(cfg.db_conn_str);
+    //test_bz2();
 
-    test_fill(conn);
+    //PGconn *conn = conn_open_or_die(cfg.db_conn_str);
+
+    //test_fill(conn);
 
     /*
     const char *fname = "data";
@@ -277,7 +285,7 @@ int main(int argc, char** argv)
     tank_merge(conn);
      */
 
-    conn_close(conn);
+    //conn_close(conn);
 
     return (EXIT_SUCCESS);
 }
