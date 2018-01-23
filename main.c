@@ -15,7 +15,8 @@
 typedef struct {
     char *db_conn_str;
     char *url;
-    char *filename;
+    char *download_filename;
+    char *decompress_filename;
 } config_s;
 
 config_s cfg;
@@ -24,7 +25,8 @@ void load_config()
 {
     cfg.db_conn_str = "host=127.0.0.1 port=5432 dbname=venus user=isa password=1q2w3e connect_timeout=2";
     cfg.url = "https://guvm.mvd.ru/upload/expired-passports/list_of_expired_passports.csv.bz2";
-    cfg.filename = "data/download.bz2";
+    cfg.download_filename = "data/download.csv.bz2";
+    cfg.decompress_filename = "data/download.csv";
 }
 
 static void die(PGconn *conn, const char *msg)
@@ -38,30 +40,6 @@ static void die(PGconn *conn, const char *msg)
     }
 
     exit(EXIT_FAILURE);
-}
-
-const char *read_text_file(const char *filename)
-{
-    FILE *f = fopen(filename, "r");
-    if (!f) {
-        return NULL;
-    }
-
-    fseek(f, 0L, SEEK_END);
-    long len = ftell(f);
-    rewind(f);
-
-    char *res = malloc(len);
-    if (!res) {
-        fclose(f);
-        return NULL;
-    }
-
-    fread(res, 1, len, f);
-
-    fclose(f);
-
-    return res;
 }
 
 static PGconn *conn_open_or_die(const char *conninfo)
@@ -110,51 +88,9 @@ void tank_create(PGconn *conn)
     PQclear(res);
 }
 
-void tank_fill(PGconn *conn)
+void tank_fill(PGconn *conn, char *filename)
 {
-    char *err_msg = NULL;
-
-    char buf[] = "test";
-
-    PGresult *res = PQexec(conn, "copy tank (raw) from stdin;");
-    int copy_res = PQputCopyData(conn, buf, strlen(buf));
-    if (copy_res != 1) {
-        cleanup_and_die(conn, res);
-    }
-    copy_res = PQputCopyEnd(conn, err_msg);
-    if (copy_res != 1) {
-        cleanup_and_die(conn, res);
-    }
-
-    res = PQexec(conn, "commit;");
-    if (PQresultStatus(res) != PGRES_COMMAND_OK) {
-        cleanup_and_die(conn, res);
-    }
-}
-
-void tank_merge(PGconn *conn)
-{
-    const char *merge_sql = read_text_file("merge.pgsql");
-    if (!merge_sql) {
-        die(conn, "failed to get merge sql");
-    }
-
-    PGresult *res = PQexec(conn, merge_sql);
-
-    if (PQresultStatus(res) != PGRES_COMMAND_OK) {
-        cleanup_and_die(conn, res);
-    }
-
-    PQclear(res);
-}
-
-/*
- * tests
- */
-
-void test_fill(PGconn *conn)
-{
-    FILE *f = fopen("data/test_data.txt", "r");
+    FILE *f = fopen(filename, "r");
     if (f == NULL) {
         perror("fopen");
         exit(EXIT_FAILURE);
@@ -194,32 +130,79 @@ void test_fill(PGconn *conn)
     }
 }
 
-void test_bz2()
+static const char *read_text_file(const char *filename)
 {
-    const char *fn_r = "data/test_data.txt.bz2";
-    const char *fn_w = "data/out.txt";
+    FILE *f = fopen(filename, "r");
+    if (!f) {
+        return NULL;
+    }
 
+    fseek(f, 0L, SEEK_END);
+    long len = ftell(f);
+    rewind(f);
+
+    char *res = malloc(len);
+    if (!res) {
+        fclose(f);
+        return NULL;
+    }
+
+    fread(res, 1, len, f);
+
+    fclose(f);
+
+    return res;
+}
+
+void tank_merge(PGconn *conn)
+{
+    const char *merge_sql = read_text_file("merge.pgsql");
+    if (!merge_sql) {
+        die(conn, "failed to get merge sql");
+    }
+
+    PGresult *res = PQexec(conn, merge_sql);
+
+    if (PQresultStatus(res) != PGRES_COMMAND_OK) {
+        cleanup_and_die(conn, res);
+    }
+
+    PQclear(res);
+}
+
+static void process(PGconn *conn)
+{
+    tank_create(conn);
+
+    tank_fill(conn, cfg.decompress_filename);
+
+    tank_merge(conn);
+}
+
+void decompress_bz2(const char *fn_r, const char *fn_w)
+{
     FILE *fp_w = fopen(fn_w, "wb");
     if (!fp_w) {
         perror("open");
         exit(1);
     }
 
-    int len;
-    char buff[100];
-
     BZFILE *fp_r = BZ2_bzopen(fn_r, "rb");
     if (!fp_r) {
-        perror("reson");
+        fclose(fp_w);
+        perror("bzopen");
         exit(1);
     }
 
-    while ((len = BZ2_bzread(fp_r, buff, 100)) > 0) {
+    int len;
+    const int n = 0x1000;
+    char buff[n];
+
+    while ((len = BZ2_bzread(fp_r, buff, n)) > 0) {
         fwrite(buff, 1, len, fp_w);
     }
 
     BZ2_bzclose(fp_r);
-
     fclose(fp_w);
 }
 
@@ -259,33 +242,23 @@ int download_file(const char *url, const char *filename)
     return 0;
 }
 
+static void test_decompress_bz2()
+{
+    decompress_bz2("data/test_data.txt.bz2", "data/out.txt");
+}
+
 int main(int argc, char** argv)
 {
-    load_config();      
-    
-    download_file(cfg.url, cfg.filename);
+    load_config();
 
-    //test_bz2();
+    //download_file(cfg.url, cfg.download_filename);
+    //decompress_bz2(cfg.download_filename, cfg.decompress_filename);
 
-    //PGconn *conn = conn_open_or_die(cfg.db_conn_str);
+    PGconn *conn = conn_open_or_die(cfg.db_conn_str);
 
-    //test_fill(conn);
+    process(conn);
 
-    /*
-    const char *fname = "data";
-
-    int res = download_file(cfg.url, fname);
-    if (!res) {
-        die(NULL, "failed to download file");
-    }*/
-
-    /*
-    tank_create(conn);
-    tank_fill(conn);
-    tank_merge(conn);
-     */
-
-    //conn_close(conn);
+    conn_close(conn);
 
     return (EXIT_SUCCESS);
 }
