@@ -1,5 +1,7 @@
 #define _GNU_SOURCE
 
+#define FRESH_TEST 1
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
@@ -25,8 +27,14 @@ void load_config()
 {
     cfg.db_conn_str = "host=127.0.0.1 port=5432 dbname=venus user=isa password=1q2w3e connect_timeout=2";
     cfg.url = "https://guvm.mvd.ru/upload/expired-passports/list_of_expired_passports.csv.bz2";
+    
+#if FRESH_TEST
+    cfg.download_filename = "data/test_data.txt.bz2";
+    cfg.decompress_filename = "data/test_data.txt";
+#elif
     cfg.download_filename = "data/download.csv.bz2";
     cfg.decompress_filename = "data/download.csv";
+#endif
 }
 
 static void die(PGconn *conn, const char *msg)
@@ -75,7 +83,7 @@ static void cleanup_and_die(PGconn *conn, PGresult *res)
 void tank_create(PGconn *conn)
 {
     PGresult *res = PQexec(conn,
-            "create temp table tank "
+            "create table tank "
             "(id bigserial, "
             "serie character varying(15) null, "
             "number character varying(15) null, "
@@ -97,7 +105,7 @@ void tank_fill(PGconn *conn, char *filename)
     }
 
     int r = 0;
-    const char *query = "copy test_tank (raw) from stdin;";
+    const char *query = "copy tank (raw) from stdin;";
 
     PGresult * res = NULL;
     char * line = NULL;
@@ -170,15 +178,6 @@ void tank_merge(PGconn *conn)
     PQclear(res);
 }
 
-static void process(PGconn *conn)
-{
-    tank_create(conn);
-
-    tank_fill(conn, cfg.decompress_filename);
-
-    tank_merge(conn);
-}
-
 void decompress_bz2(const char *fn_r, const char *fn_w)
 {
     FILE *fp_w = fopen(fn_w, "wb");
@@ -196,19 +195,19 @@ void decompress_bz2(const char *fn_r, const char *fn_w)
 
     int len;
     const int n = 0x1000;
-    char buff[n];
+    char s[n];
 
-    while ((len = BZ2_bzread(fp_r, buff, n)) > 0) {
-        fwrite(buff, 1, len, fp_w);
+    while ((len = BZ2_bzread(fp_r, s, n)) > 0) {
+        fwrite(s, 1, len, fp_w);
     }
 
     BZ2_bzclose(fp_r);
     fclose(fp_w);
 }
 
-static size_t write_file(void *ptr, size_t size, size_t nmemb, FILE *f)
+static size_t write_file(void *ptr, size_t size, size_t nmemb, FILE *fp)
 {
-    return fwrite(ptr, size, nmemb, f);
+    return fwrite(ptr, size, nmemb, fp);
 }
 
 int download_file(const char *url, const char *filename)
@@ -220,6 +219,7 @@ int download_file(const char *url, const char *filename)
 
     FILE *fp = fopen(filename, "wb");
     if (!fp) {
+        curl_easy_cleanup(curl);
         die(NULL, "failed to open file");
     }
 
@@ -234,10 +234,10 @@ int download_file(const char *url, const char *filename)
         fclose(fp);
         return -1;
     }
-
-    curl_easy_cleanup(curl);
-
+    
     fclose(fp);
+
+    curl_easy_cleanup(curl);    
 
     return 0;
 }
@@ -250,13 +250,19 @@ static void test_decompress_bz2()
 int main(int argc, char** argv)
 {
     load_config();
-
-    //download_file(cfg.url, cfg.download_filename);
-    //decompress_bz2(cfg.download_filename, cfg.decompress_filename);
+    
+#if !FRESH_TEST
+    download_file(cfg.url, cfg.download_filename);
+#endif
+    decompress_bz2(cfg.download_filename, cfg.decompress_filename);
 
     PGconn *conn = conn_open_or_die(cfg.db_conn_str);
 
-    process(conn);
+    tank_create(conn);
+
+    tank_fill(conn, cfg.decompress_filename);
+
+    tank_merge(conn);
 
     conn_close(conn);
 
