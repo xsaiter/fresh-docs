@@ -27,7 +27,7 @@ void load_config()
 {
     cfg.db_conn_str = "host=127.0.0.1 port=5432 dbname=venus user=isa password=1q2w3e connect_timeout=2";
     cfg.url = "https://guvm.mvd.ru/upload/expired-passports/list_of_expired_passports.csv.bz2";
-    
+
 #if FRESH_TEST
     cfg.download_filename = "data/test_data.txt.bz2";
     cfg.decompress_filename = "data/test_data.txt";
@@ -57,6 +57,29 @@ static PGconn *conn_open_or_die(const char *conninfo)
         LOG_ERR("failed to open connection: %s", PQerrorMessage(conn));
         die(conn, NULL);
     }
+
+    int socket_fd = PQsocket(conn);
+    if (socket_fd < 0) {
+        LOG_ERR("socket: %s", PQerrorMessage(conn));
+        die(conn, NULL);
+    }
+
+    struct timeval timeout = {90000, 0};
+
+    int setopt_recv = setsockopt(socket_fd, SOL_SOCKET, SO_RCVTIMEO,
+            (char *) &timeout, sizeof (timeout));
+    if (setopt_recv < 0) {
+        LOG_ERR("setopt_recv: %s", PQerrorMessage(conn));
+        die(conn, NULL);
+    }
+
+    int setopt_send = setsockopt(socket_fd, SOL_SOCKET, SO_SNDTIMEO,
+            (char *) &timeout, sizeof (timeout));
+    if (setopt_send < 0) {
+        LOG_ERR("setopt_send: %s", PQerrorMessage(conn));
+        die(conn, NULL);
+    }
+
     return conn;
 }
 
@@ -80,10 +103,10 @@ static void cleanup_and_die(PGconn *conn, PGresult *res)
     exit(EXIT_FAILURE);
 }
 
-void tank_create(PGconn *conn)
+void create_tank(PGconn *conn)
 {
     PGresult *res = PQexec(conn,
-            "create table tank "
+            "create temp table tank "
             "(id bigserial, "
             "serie character varying(15) null, "
             "number character varying(15) null, "
@@ -96,7 +119,7 @@ void tank_create(PGconn *conn)
     PQclear(res);
 }
 
-void tank_fill(PGconn *conn, char *filename)
+void fill_tank(PGconn *conn, char *filename)
 {
     FILE *f = fopen(filename, "r");
     if (f == NULL) {
@@ -162,7 +185,7 @@ static const char *read_text_file(const char *filename)
     return res;
 }
 
-void tank_merge(PGconn *conn)
+void merge_tank(PGconn *conn)
 {
     const char *merge_sql = read_text_file("merge.pgsql");
     if (!merge_sql) {
@@ -234,10 +257,10 @@ int download_file(const char *url, const char *filename)
         fclose(fp);
         return -1;
     }
-    
+
     fclose(fp);
 
-    curl_easy_cleanup(curl);    
+    curl_easy_cleanup(curl);
 
     return 0;
 }
@@ -250,7 +273,7 @@ static void test_decompress_bz2()
 int main(int argc, char** argv)
 {
     load_config();
-    
+
 #if !FRESH_TEST
     download_file(cfg.url, cfg.download_filename);
 #endif
@@ -258,11 +281,11 @@ int main(int argc, char** argv)
 
     PGconn *conn = conn_open_or_die(cfg.db_conn_str);
 
-    tank_create(conn);
+    create_tank(conn);
 
-    tank_fill(conn, cfg.decompress_filename);
+    fill_tank(conn, cfg.decompress_filename);
 
-    tank_merge(conn);
+    merge_tank(conn);
 
     conn_close(conn);
 

@@ -8,7 +8,7 @@ begin
 if not exists (
    select 1
    from information_schema.tables
-   where table_schema = 'public' and table_name = 'expired_doc'
+   where table_schema = 'public' and table_name = 'expired_passport'
 ) then raise exception 'table not found';
 end if;
 
@@ -27,7 +27,7 @@ where id in (
     select *, row_number() over(partition by serie, number order by id asc) rn
     from tank
   ) t
-  where t.rn > 1 or (upper(t.serie) == 'PASSP_SERIES' and upper(t.number) = 'PASSP_NUMBER')
+  where t.rn > 1 or (upper(t.serie) = 'PASSP_SERIES' and upper(t.number) = 'PASSP_NUMBER')
 );
 
 with rr as (
@@ -42,9 +42,9 @@ with rr as (
     t.updated_at tupdated_at
   from
     tank s
-    full join expired_doc t on t.serie = s.serie and t.number = s.number
+    full join expired_passport t on t.serie = s.serie and t.number = s.number
 )
-update expired_doc t
+update expired_passport t
 set
   is_removed = (
     case
@@ -60,11 +60,11 @@ from (
 ) tt
 where t.id = tt.tid;
 
-insert into expired_doc (serie, number)
+insert into expired_passport (serie, number)
 select s.serie, s.number
 from tank s
 where not exists (
-  select 1 from expired_docs t
+  select 1 from expired_passport t
   where t.serie = s.serie and t.number = s.number
   limit 1 
 );
@@ -75,4 +75,3 @@ end
 
 $$
 language plpgsql;
-
