@@ -1,6 +1,6 @@
 #define _GNU_SOURCE
 
-#define FRESH_TEST 1
+#define FRESH_TEST
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -28,7 +28,7 @@ void load_config()
     cfg.db_conn_str = "host=127.0.0.1 port=5432 dbname=venus user=isa password=1q2w3e connect_timeout=2";
     cfg.url = "https://guvm.mvd.ru/upload/expired-passports/list_of_expired_passports.csv.bz2";
 
-#if FRESH_TEST
+#ifdef FRESH_TEST
     cfg.download_filename = "data/test_data.txt.bz2";
     cfg.decompress_filename = "data/test_data.txt";
 #elif
@@ -163,24 +163,26 @@ void fill_tank(PGconn *conn, char *filename)
 
 static const char *read_text_file(const char *filename)
 {
-    FILE *f = fopen(filename, "r");
-    if (!f) {
-        return NULL;
+    FILE *fp = fopen(filename, "r");
+    if (!fp) {
+       fprintf(stderr, "failed to open file %s", filename);
+       perror(filename);
+       return NULL;
     }
 
-    fseek(f, 0L, SEEK_END);
-    long len = ftell(f);
-    rewind(f);
+    fseek(fp, 0L, SEEK_END);
+    long len = ftell(fp);
+    rewind(fp);
 
     char *res = malloc(len);
     if (!res) {
-        fclose(f);
+        fclose(fp);        
         return NULL;
     }
 
-    fread(res, 1, len, f);
+    fread(res, 1, len, fp);
 
-    fclose(f);
+    fclose(fp);
 
     return res;
 }
@@ -274,7 +276,7 @@ int main(int argc, char** argv)
 {
     load_config();
 
-#if !FRESH_TEST
+#ifndef FRESH_TEST
     download_file(cfg.url, cfg.download_filename);
 #endif
     decompress_bz2(cfg.download_filename, cfg.decompress_filename);
