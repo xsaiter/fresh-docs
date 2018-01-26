@@ -1,15 +1,15 @@
 #define _GNU_SOURCE
 
-#define FRESH_TEST
+#define FD_TEST
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
 #include <string.h>
 
-#include <libpq-fe.h>
-#include <curl/curl.h>
-#include <bzlib.h>
+#include "libpq-fe.h"
+#include "curl/curl.h"
+#include "bzlib.h"
 
 #define LOG_ERR(...) fprintf(stderr, __VA_ARGS__)
 #define LOG_INFO(...) printf(__VA_ARGS__)
@@ -28,7 +28,7 @@ void load_config()
     cfg.db_conn_str = "host=127.0.0.1 port=5432 dbname=venus user=isa password=1q2w3e connect_timeout=2";
     cfg.url = "https://guvm.mvd.ru/upload/expired-passports/list_of_expired_passports.csv.bz2";
 
-#ifdef FRESH_TEST
+#ifdef FD_TEST
     cfg.download_filename = "data/test_data.txt.bz2";
     cfg.decompress_filename = "data/test_data.txt";
 #elif
@@ -276,7 +276,7 @@ int main(int argc, char** argv)
 {
     load_config();
 
-#ifndef FRESH_TEST
+#ifndef FD_TEST
     download_file(cfg.url, cfg.download_filename);
 #endif
     decompress_bz2(cfg.download_filename, cfg.decompress_filename);
